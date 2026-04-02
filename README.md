@@ -9,7 +9,7 @@ Additional dependencies include SAC, iterdecon (a fortran package which can be f
 digitized from articles cited in the text.
 
 As the primary author, and developer for these scripts, I encourage these scripts to be snipped and copied to be used in other works provided that this work is acknowledged. Also, as a point of note, as 
-the main article this software contributes to is published by the time this repository is public, these scripts will not receive any updates. Please be aware these were developed using Python 3.14.
+the main article this software contributes to is published by the time this repository is public, these scripts will not receive any updates. Please be aware these were developed using Python 3.12.
 
 Happy analyzing,
 -Jim Bradford, University of Arizona

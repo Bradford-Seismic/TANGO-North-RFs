@@ -1,0 +1,892 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Oct 27 18:30:31 2025
+
+@author: 7418888
+"""
+
+
+import numpy as np
+import pandas as pd
+import os
+import sys
+import obspy
+import matplotlib.pyplot as plt
+from obspy.core import UTCDateTime as utc
+from obspy.core import Stream, read
+from obspy import read_inventory
+from obspy.io.sac import SACTrace
+from obspy.signal.trigger import recursive_sta_lta
+import obspy.taup.taup_geo as taup
+from obspy.taup import TauPyModel
+from glob import glob
+import warnings
+import matplotlib.dates as dates
+import pygmt
+import subprocess
+import math
+import geopandas as gpd
+import shapely
+import xarray as xr
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+from math import radians, sin, cos, sqrt, atan2
+import io
+import time
+from shapely.ops import unary_union
+from scipy.spatial import KDTree
+from obspy.geodetics import degrees2kilometers
+
+
+from pyproj import CRS, Transformer
+
+
+warnings.simplefilter('ignore', category = UserWarning)
+warnings.simplefilter('ignore', category = FutureWarning)
+
+active_dir = './'
+
+
+
+os.chdir(active_dir)
+model = TauPyModel(model="iasp91")
+
+
+
+stations = pd.read_csv('../DATA/SPREADSHEETS/SA_Stations.csv')
+moveouts = pd.read_csv('../DATA/SPREADSHEETS/Moveout_Summary.csv')
+downloads = pd.read_csv('../DATA/SPREADSHEETS/Download_Summary.csv')
+snr = pd.read_csv('../DATA/SPREADSHEETS/SNR_Summary.csv')
+itd = pd.read_csv('../DATA/SPREADSHEETS/Iterdecon_Summary_RE.csv', keep_default_na=False)
+
+region = 'TANGO_North'
+
+stat_table = pd.read_csv('../DATA/SPREADSHEETS/{}_FinalStations_RE.csv'.format(region))
+stat_table['Code'] = ['{}-{}'.format(stat_table.net[i], stat_table.stat[i]) for i in range(len(stat_table))]
+
+contributing_stations = pd.read_csv('../DATA/SPREADSHEETS/Contributing_Stations.csv')
+
+stat_table = stat_table[stat_table.Code.isin(contributing_stations.Code)].reset_index(drop = True)
+
+
+
+joints =  np.loadtxt('../DATA/MAPPING/{}_CCP_Line.txt'.format(region), delimiter = ',')
+
+def closest_idx(lst, K):
+     lst = np.asarray(lst)
+     idx = (np.abs(lst - K)).argmin()
+     return idx
+
+def haversine(lat1, lon1, lat2, lon2):
+    # Convert latitude and longitude from degrees to radians
+    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+
+    # Haversine formula
+    d_lat = lat2 - lat1
+    d_lon = lon2 - lon1
+    a = sin(d_lat/2)**2 + cos(lat1) * cos(lat2) * sin(d_lon/2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1-a))
+    distance = 6371 * c  # Earth radius in kilometers (approx.)
+    return distance
+
+def Return_Line_Elements(joints):
+
+
+    points_per_km = 10
+
+    # distance between joint-points
+    d = np.array([0])
+    num_points = np.array([])
+    for i in range(len(joints)-1):
+        d = np.append(d, haversine(joints[i,1], joints[i,0],joints[i+1,1], joints[i+1,0]))
+        num_points = np.append(num_points, np.round(d[-1] * points_per_km))
+
+    joints_dist = np.cumsum(d)
+
+
+    # lat-lon coords of line
+    line = np.array([0,0])
+    for i in range(len(joints)-1):
+        l = np.linspace(joints[i], joints[i+1], int(num_points[i]))
+        line = np.vstack((line, l))
+
+    line = line[1:len(line)]
+
+
+    # cummulative distance along line
+    d = np.array([0])
+    for i in range(len(line)-1):
+        d = np.append(d, haversine(line[i,1], line[i,0],line[i+1,1], line[i+1,0]))
+
+    line_dist = np.cumsum(d)
+
+    return joints_dist, line, line_dist
+
+def plot_topo(fig):
+    
+    fig.basemap(region = [0, joints_dist[-1], 0,8], projection = 'X{}c/{}c'.format(fig_x, 1.5), frame = ['WsNe', 'xa100f10', 'ya5f1+e+lElev. (km)'])
+
+    topo_x = np.append(line_dist[0], line_dist)
+    topo_x = np.append(topo_x, line_dist[-1])
+
+
+    # on-line topography
+
+    dem = grid.interp(lat = y, lon = x, method = 'linear')
+    dem = dem.assign_coords({'Distance_Along_Trend': line_dist})
+
+    topo = np.append(0, dem.values)
+    topo = np.append(topo, 0)
+
+
+    fig.plot(x = topo_x, y = topo/1000, fill = 'lightgray', pen = '0.5p,black')
+
+    # project tectonic zones
+    
+    tecto_zones = gpd.read_file('../DATA/MAPPING/AndeanTectonicRegimes2.shp')
+
+    try:
+        int_dists = []
+        fig.plot(x = [30, 30], y = [4, 6], pen = '1p,black')
+        fig.plot(x = [joints_dist[-1], joints_dist[-1]], y = [4, 6], pen = '1p,black')
+
+        used_areas = []
+        for j in range(len(joints)-1):
+            
+            line_gpd = gpd.GeoSeries(data = shapely.geometry.LineString([joints[j], joints[j+1]]), crs = tecto_zones.crs)
+
+            int_dists = []
+            areas = ['LV', 'CD', 'SdA', 'WC', 'Puna', 'EC', 'SB']
+
+            for area in areas:
+                try:
+                    if area in used_areas:
+                        continue
+
+                    else:
+                        poly_int = tecto_zones[tecto_zones.Zone == area].union_all().intersection(line_gpd)
+                        poly_int = poly_int.get_coordinates().to_numpy()[0,:]
+
+
+                        int_dist = haversine(joints[j,1], joints[j,0], poly_int[1], poly_int[0]) + joints_dist[j]
+                        int_elev = dem.values[closest_idx(dem['Distance_Along_Trend'], int_dist)]
+                        int_dists.append(int_dist)
+
+                        fig.plot(x = [int_dist, int_dist], y = [4, 6], pen = '1p,black')
+                        fig.plot(x = [int_dist, int_dist], y = [4, 6], pen = '1p,black')
+
+                        used_areas.append(area)
+
+
+                except:
+                      pass
+        fig.plot(x = [30, joints_dist[-1]], y = [6, 6], pen = '1p,black')
+
+    except:
+        pass
+
+
+    # project APVC
+
+    APVC = gpd.read_file('../DATA/MAPPING/APVC2.shp')
+    line_gpd = gpd.GeoSeries(data = shapely.geometry.LineString([joints[0], joints[1]]), crs = APVC.crs)
+
+
+    poly_int = APVC.union_all().intersection(line_gpd)
+    poly_int = poly_int.get_coordinates().to_numpy()
+    
+    within_mask = shapely.within(shapely.points(line[:,0], line[:,1]), APVC.union_all())
+    APVC_x = line_dist.copy()
+    
+    groups = np.split(APVC_x, np.flatnonzero(np.diff(within_mask)) + 1)
+    mask_groups = np.split(within_mask, np.flatnonzero(np.diff(within_mask)) + 1)  
+    true_groups = [g for g, m in zip(groups, mask_groups) if m[0]]    
+    
+    for sub_group_x in true_groups:
+        sub_group_y = dem.interp(Distance_Along_Trend = sub_group_x, method = 'linear').copy().values/1000
+        sub_group_x = np.append(sub_group_x[0], sub_group_x); sub_group_x = np.append(sub_group_x, sub_group_x[-1])
+        sub_group_y = np.append(0, sub_group_y); sub_group_y = np.append(sub_group_y, 0)
+
+    
+        fig.plot(x = sub_group_x, y = sub_group_y,  fill = 'pink')
+
+
+
+    # project stations
+    codes = ['{}-{}'.format(stat_table.net[i], stat_table.stat[i])
+             for i in range(len(stat_table))]
+    stat_table['code'] = codes
+
+    stat_data = pd.DataFrame({'longitude': stat_table.stlo.values, 'latitude': stat_table.stla.values,
+                             'elevation': stat_table.stel.values, 'code': stat_table.code.values})
+    used_data = []
+    for i in range(len(joints) - 1):
+        track = pygmt.project(data=stat_data, center=joints[i], endpoint=joints[i+1], width=[
+                              -24, 24], length=[0, joints_dist[i+1] - joints_dist[i]], unit=True)
+        track = track.rename(columns={
+                             0: 'longitude', 1: 'latitude', 2: 'elevation', 3: 'p', 4: 'q', 5: 'r', 6: 's', 7: 'code'})
+
+        if len(track) > 0:
+            data_used_check = [track.code[j]
+                               in used_data for j in range(len(track))]
+            data_used_check = [not (bool(data_used_check[j]))
+                               for j in range(len(data_used_check))]
+            track = track[data_used_check].reset_index(drop=True)
+            used_data = np.append(used_data, np.unique(track.code.values))
+
+            stat_elev_interp = grid.interp(lat=xr.DataArray(track.latitude, dims='Distance'), lon=xr.DataArray(
+                track.longitude, dims='Distance'), method='linear')
+
+            fig.plot(x=track.p + joints_dist[i], y=stat_elev_interp.values /
+                     1000, style='i0.3c', fill='gold', pen='0.3,black')
+
+
+
+            try:
+                fig.plot(x=track.p[track.code.str.contains('XN')] + joints_dist[i],
+                         y=stat_elev_interp.values[track.code.str.contains('XN')]/1000, style='i0.3c', fill='cyan', pen='0.3,black')
+            except:
+                pass
+            try:
+                fig.plot(x=track.p[track.code.str.contains('ZR')] + joints_dist[i],
+                         y=stat_elev_interp.values[track.code.str.contains('ZR')]/1000, style='i0.3c', fill='lightred', pen='0.3,black')
+            except:
+                pass
+
+            try:
+                fig.plot(x=track.p[track.code.str.contains('XM')] + joints_dist[i], y=stat_elev_interp.values[track.code.str.contains(
+                    'XM')]/1000, style='i0.3c', fill='magenta', pen='0.3,black')
+
+            except:
+                pass
+
+
+    # Plot joints
+    fig.text(x = joints_dist, y = np.ones(len(joints_dist)) * 7, text = list('AB'), font = '14p, Helvetica-Bold', fill = 'white', pen = '0.3p,black', no_clip = True)
+    sub_joints =  np.array([[-65.5816, -24.1358], [-64.8716, -24.3922]]) # Sub-line for north array
+    sub_joint_df = pd.DataFrame({'longitude': sub_joints[:,0], 'latitude': sub_joints[:,1]})
+    track = pygmt.project(data=sub_joint_df, center=joints[0], endpoint=joints[1], width=[
+                          -100, 100], length=[0, joints_dist[1] - joints_dist[0]], unit=True)
+    track = track.rename(columns={
+                         0: 'longitude', 1: 'latitude', 2:  'p', 3: 'q', 4: 'r', 5: 's'})
+
+    fig.text(x = track.p, y = np.ones(len(joints_dist)) * 7, text = list('12'), font = '14p, Helvetica-Bold', fill = 'white', pen = '0.3p,black', no_clip = True)
+
+
+        
+        
+    # project volcanoes
+    try:
+        volcanoes = pd.read_csv('../DATA/MAPPING/GVP_Holocene_Volcanoes.csv')
+        volc_data = pd.DataFrame({'longitude': volcanoes.Longitude.values, 'latitude': volcanoes.Latitude.values,
+                                 'elevation': volcanoes['Elevation (m)'].values, 'volc_id': volcanoes['Volcano Number'].values})
+        used_data = []
+        for i in range(len(joints) - 1):
+
+            # note the little buffer of on the 'length' parameter, for some reason, some lines if the vertex is
+            # right on the point, it won't project
+            track = pygmt.project(data=volc_data, center=joints[i], endpoint=joints[i+1], width=[-24, 24], length=[
+                                  0, joints_dist[i+1] - joints_dist[i]], unit=True)
+            track = track.rename(columns={
+                                 0: 'longitude', 1: 'latitude', 2: 'elevation', 3: 'volc_id', 4: 'p', 5: 'q', 6: 'r', 7: 's'})
+
+            if len(track) > 0:
+                data_used_check = [track.volc_id[j]
+                                   in used_data for j in range(len(track))]
+                data_used_check = [not (bool(data_used_check[j]))
+                                   for j in range(len(data_used_check))]
+                track = track[data_used_check].reset_index(drop=True)
+                used_data = np.append(
+                    used_data, np.unique(track.volc_id.values))
+
+                volc_elev_interp = grid.interp(lat=xr.DataArray(track.latitude, dims='Distance'), lon=xr.DataArray(
+                    track.longitude, dims='Distance'), method='linear')
+
+                fig.plot(x=track.p + joints_dist[i], y=volc_elev_interp.values/1000,
+                         style='kvolcano/0.5c', fill='red', pen='0.5,black')
+    except:
+        pass
+
+
+
+
+    return fig
+
+
+
+
+
+joints_dist, line, line_dist = Return_Line_Elements(joints)
+
+
+
+gmt_region = [-71.5, -63, -25, -21.4]
+west, east, south, north = gmt_region
+
+
+grid = pygmt.datasets.load_earth_relief(resolution="15s", region=gmt_region)
+
+fig_x = 20
+depth = 120
+t_depth = 15
+aspect = 1
+
+ratio = line_dist.max() / 20 # km per figure cm
+fig_y = depth/ratio
+
+
+x = xr.DataArray(line[:,0], dims='Distance_Along_Trend')
+y = xr.DataArray(line[:,1], dims='Distance_Along_Trend')
+
+
+slab = xr.open_dataset('../DATA/MAPPING/sam_slab2_dep_02.23.18.grd')
+slab.coords['longitude'] = slab.x - 360; slab.coords['latitude'] = slab.y
+slab = slab.swap_dims({'x': 'longitude', 'y': 'latitude'})
+
+slab_slice = slab.interp(longitude = x, latitude = y, method = 'linear')
+slab_slice = slab_slice.assign_coords({'Distance_Along_Trend': line_dist})
+
+
+fig = pygmt.Figure()
+with pygmt.config(FONT = '12p', MAP_ANNOT_OFFSET="10p", MAP_LABEL_OFFSET="10p"):
+   
+    
+   
+    fig = plot_topo(fig)
+    fig.shift_origin(yshift = f'{-fig_y}c')
+    
+   ##### Plot Time Domain A-B
+    fig.basemap(region = [0, line_dist.max(), -0.5, t_depth], projection = 'X{}c/-{}c'.format(fig_x, fig_y), frame = ['Wsen', 'xa100f10+lProfile Distance (km)', 'ya5f1+lTime (s)'])
+
+    ## Pull QC passing data
+    itd_use = itd[itd.G == 1.0][(itd.Accept == 'Auto QC Pass') | (itd.Accept == 'Man QC Pass')][itd.Region == region]
+    
+    ## collect station location
+    stlas = [stations.Latitude[stations.code == code.replace('_', '-')].values[0] for code in itd_use.Code]
+    stlos = [stations.Longitude[stations.code == code.replace('_', '-')].values[0] for code in itd_use.Code]
+    
+    stat_coords = np.c_[stlos, stlas]
+    
+    itd_use['stlo'] = stlos
+    itd_use['stla'] = stlas
+    
+    
+    ## search for data in range of A-B line
+    line_tree = KDTree(line)
+    
+    data_in_range = line_tree.query_ball_point(x = stat_coords, r = 30 / degrees2kilometers(1))
+    data_in_range =[bool(data_in_range[j]) for j in range(len(data_in_range))]
+    
+    
+    ## search for data in range of 1-2 line
+    joints12 = np.array([[-65.5816, -24.1358], [-64.8716, -24.3922]]) # Sub-line for north array
+    joints_dist12, line12, line_dist12 = Return_Line_Elements(joints12)
+
+    
+    line_tree12 = KDTree(line12)
+    data_in_range12 = line_tree12.query_ball_point(x = stat_coords, r = 10 / degrees2kilometers(1))
+    data_in_range12 =[bool(data_in_range12[j]) for j in range(len(data_in_range12))]
+    
+    
+    ## Read file data and time-stack for average station RF
+    files = np.unique(np.array(itd_use.File)[data_in_range])
+    files12 = np.unique(np.array(itd_use.File)[data_in_range12])
+    files = np.append(files, files12)
+    
+    
+    nets, stlas, stlos, stels, tr_id = [],[],[],[],[]    # resetting stlas and stlos list to queried data
+    st = Stream()
+    for f in files:
+        try:
+            st += read('../DATA/{}/DATA_CCP/{}'.format(region, f))
+        except:
+            pass
+    
+    st.stack(group_by='{network}.{station}', npts_tol=2)    # T-stack by station for average station RF
+    for i, tr in enumerate(st):
+        nets.append(tr.stats.network)
+        stlas.append(stations.Latitude[stations.code == '{}-{}'.format(tr.stats.network, tr.stats.station)].values[0])
+        stlos.append(stations.Longitude[stations.code == '{}-{}'.format(tr.stats.network, tr.stats.station)].values[0])
+        stels.append(grid.sel(lat = stlas[-1], lon = stlos[-1], method = 'nearest').values.item())
+        tr_id.append(i)
+    
+    select_data = pd.DataFrame({'longitude': np.squeeze(stlos), 'latitude': np.squeeze(stlas), 'stel': np.squeeze(stels), 'tr_id': np.array(tr_id)})
+
+
+    used_data = []
+    for i in range(len(joints) - 1):                                                    ### width here is arbitrary
+       track = pygmt.project(data = select_data,center=joints[i],endpoint=joints[i+1], width=[-100, 100], length = [0, joints_dist[i+1]], unit=True)
+       track = track.rename(columns={0:'stlo',1:'stla',2:'stel',3:'tr_id',4:'p',5:'q',6:'r',7:'s'})
+
+       ## check for re-used data from projection, remove those data
+       data_used_check = [track.tr_id[j] in used_data for j in range(len(track))]
+       data_used_check = [not(bool(data_used_check[j])) for j in range(len(data_used_check))]
+       track = track[data_used_check].reset_index(drop = True)
+       used_data = np.append(used_data, np.unique(track.tr_id.values))
+       
+       track = track.sort_values('p').reset_index(drop = True)
+
+       for j in range(len(track)-2):
+
+           station_dist = track.p[j] + joints_dist[i]
+
+           # collect data within astack_ range of each center station
+           center_tree = KDTree(np.c_[track.stlo[j], track.stla[j]])
+           in_range = center_tree.query_ball_point(x = np.c_[select_data.longitude, select_data.latitude], r = 8 / degrees2kilometers(1))
+           in_range =[bool(in_range[k]) for k in range(len(in_range))]
+           in_range = select_data[in_range].tr_id.values
+
+           st_stack = Stream()
+           for trace in in_range:
+               st_stack += st[trace].copy()
+
+           st_stack.stack(npts_tol = 2)
+           
+           ## normalize to p-wave amplitude
+           extrema_limit = st_stack[0].data.max() * 0.10
+           # cycle through the data array to find all major extrema
+           extrema=[]
+           extrema_i = []
+           k = 1
+           for dat in st_stack[0].data[1:len(st_stack[0].data)-2]:
+               left = st_stack[0].data[k - 1]
+               right = st_stack[0].data[k + 1]
+               if (dat > left) and (dat > right):
+                       if dat > extrema_limit:
+                           extrema.append(dat)
+                           extrema_i.append(k)
+               elif (dat < left) and (dat < right):
+                   if dat < -extrema_limit:
+                       extrema.append(dat)
+                       extrema_i.append(k) 
+               k += 1
+               
+           
+           # get the first peak amplitude, and divide the data by this value
+           # the data is now normalized
+           p_amp = extrema[0]
+           
+           st_stack[0].data = st_stack[0].data / p_amp
+
+
+           tr = st_stack[0]
+           data = tr.data
+           time = tr.times() - 10
+
+           time_trim = time
+           data_trim = data * 20 + station_dist
+
+           pos = data_trim.copy()
+           neg = data_trim.copy()
+
+           pos[0] = station_dist
+           pos[pos < station_dist] = station_dist
+           pos[-1] = station_dist
+
+           neg[0] = station_dist
+           neg[neg > station_dist] = station_dist
+           neg[-1] = station_dist
+
+           fig.plot(x = pos, y = time_trim,pen = '0.1p,black', no_clip = False, fill = 'red', transparency = 20)
+           fig.plot(x = neg, y = time_trim,pen = '0.1p,black', no_clip = False, fill = 'blue', transparency = 20)
+
+
+
+
+
+
+
+
+
+
+    fig.shift_origin(yshift = '-{}c'.format(fig_y + 0.5))
+  
+   ##### Plot Time Domain A-B
+    fig.basemap(region = [0, line_dist.max(), -0.5, t_depth], projection = 'X{}c/-{}c'.format(fig_x, fig_y), frame = ['Wsen', 'xa100f10+lProfile Distance (km)', 'ya5f1+lTime (s)'])
+
+    ## Pull QC passing data
+    itd_use = itd[itd.G == 2.5][(itd.Accept == 'Auto QC Pass') | (itd.Accept == 'Man QC Pass')][itd.Region == region]
+    
+    ## collect station location
+    stlas = [stations.Latitude[stations.code == code.replace('_', '-')].values[0] for code in itd_use.Code]
+    stlos = [stations.Longitude[stations.code == code.replace('_', '-')].values[0] for code in itd_use.Code]
+    
+    stat_coords = np.c_[stlos, stlas]
+    
+    itd_use['stlo'] = stlos
+    itd_use['stla'] = stlas
+    
+    
+    ## search for data in range of A-B line
+    line_tree = KDTree(line)
+    
+    data_in_range = line_tree.query_ball_point(x = stat_coords, r = 30 / degrees2kilometers(1))
+    data_in_range =[bool(data_in_range[j]) for j in range(len(data_in_range))]
+    
+    
+    ## search for data in range of 1-2 line
+    joints12 = np.array([[-65.5816, -24.1358], [-64.8716, -24.3922]]) # Sub-line for north array
+    joints_dist12, line12, line_dist12 = Return_Line_Elements(joints12)
+
+    
+    line_tree12 = KDTree(line12)
+    data_in_range12 = line_tree12.query_ball_point(x = stat_coords, r = 10 / degrees2kilometers(1))
+    data_in_range12 =[bool(data_in_range12[j]) for j in range(len(data_in_range12))]
+    
+    
+    ## Read file data and time-stack for average station RF
+    files = np.unique(np.array(itd_use.File)[data_in_range])
+    files12 = np.unique(np.array(itd_use.File)[data_in_range12])
+    files = np.append(files, files12)
+    
+    
+    nets, stlas, stlos, stels, tr_id = [],[],[],[],[]    # resetting stlas and stlos list to queried data
+    st = Stream()
+    for f in files:
+        try:
+            st += read('../DATA/{}/DATA_CCP/{}'.format(region, f))
+        except:
+            pass
+    
+    st.stack(group_by='{network}.{station}', npts_tol=2)    # T-stack by station for average station RF
+    for i, tr in enumerate(st):
+        nets.append(tr.stats.network)
+        stlas.append(stations.Latitude[stations.code == '{}-{}'.format(tr.stats.network, tr.stats.station)].values[0])
+        stlos.append(stations.Longitude[stations.code == '{}-{}'.format(tr.stats.network, tr.stats.station)].values[0])
+        stels.append(grid.sel(lat = stlas[-1], lon = stlos[-1], method = 'nearest').values.item())
+        tr_id.append(i)
+    
+    select_data = pd.DataFrame({'longitude': np.squeeze(stlos), 'latitude': np.squeeze(stlas), 'stel': np.squeeze(stels), 'tr_id': np.array(tr_id)})
+
+
+    used_data = []
+    for i in range(len(joints) - 1):                                                    ### width here is arbitrary
+       track = pygmt.project(data = select_data,center=joints[i],endpoint=joints[i+1], width=[-100, 100], length = [0, joints_dist[i+1]], unit=True)
+       track = track.rename(columns={0:'stlo',1:'stla',2:'stel',3:'tr_id',4:'p',5:'q',6:'r',7:'s'})
+
+       ## check for re-used data from projection, remove those data
+       data_used_check = [track.tr_id[j] in used_data for j in range(len(track))]
+       data_used_check = [not(bool(data_used_check[j])) for j in range(len(data_used_check))]
+       track = track[data_used_check].reset_index(drop = True)
+       used_data = np.append(used_data, np.unique(track.tr_id.values))
+       
+       track = track.sort_values('p').reset_index(drop = True)
+
+       for j in range(len(track)-2):
+
+           station_dist = track.p[j] + joints_dist[i]
+
+           # collect data within astack_ range of each center station
+           center_tree = KDTree(np.c_[track.stlo[j], track.stla[j]])
+           in_range = center_tree.query_ball_point(x = np.c_[select_data.longitude, select_data.latitude], r = 8 / degrees2kilometers(1))
+           in_range =[bool(in_range[k]) for k in range(len(in_range))]
+           in_range = select_data[in_range].tr_id.values
+
+           st_stack = Stream()
+           for trace in in_range:
+               st_stack += st[trace].copy()
+
+           st_stack.stack(npts_tol = 2)
+           
+           ## normalize to p-wave amplitude
+           extrema_limit = st_stack[0].data.max() * 0.10
+           # cycle through the data array to find all major extrema
+           extrema=[]
+           extrema_i = []
+           k = 1
+           for dat in st_stack[0].data[1:len(st_stack[0].data)-2]:
+               left = st_stack[0].data[k - 1]
+               right = st_stack[0].data[k + 1]
+               if (dat > left) and (dat > right):
+                       if dat > extrema_limit:
+                           extrema.append(dat)
+                           extrema_i.append(k)
+               elif (dat < left) and (dat < right):
+                   if dat < -extrema_limit:
+                       extrema.append(dat)
+                       extrema_i.append(k) 
+               k += 1
+               
+           
+           # get the first peak amplitude, and divide the data by this value
+           # the data is now normalized
+           p_amp = extrema[0]
+           
+           st_stack[0].data = st_stack[0].data / p_amp
+
+
+           tr = st_stack[0]
+           data = tr.data
+           time = tr.times() - 10
+
+           time_trim = time
+           data_trim = data * 20 + station_dist
+
+           pos = data_trim.copy()
+           neg = data_trim.copy()
+
+           pos[0] = station_dist
+           pos[pos < station_dist] = station_dist
+           pos[-1] = station_dist
+
+           neg[0] = station_dist
+           neg[neg > station_dist] = station_dist
+           neg[-1] = station_dist
+
+           fig.plot(x = pos, y = time_trim,pen = '0.1p,black', no_clip = False, fill = 'red', transparency = 20)
+           fig.plot(x = neg, y = time_trim,pen = '0.1p,black', no_clip = False, fill = 'blue', transparency = 20)
+
+
+
+
+
+
+
+
+    fig.shift_origin(yshift = '-{}c'.format(fig_y + 0.5))
+  
+   ##### Plot Time Domain A-B
+    fig.basemap(region = [0, line_dist.max(), -0.5, t_depth], projection = 'X{}c/-{}c'.format(fig_x, fig_y), frame = ['WSen', 'xa100f10+lProfile Distance (km)', 'ya5f1+lTime (s)'])
+
+    ## Pull QC passing data
+    itd_use = itd[itd.G == 5.0][(itd.Accept == 'Auto QC Pass') | (itd.Accept == 'Man QC Pass')][itd.Region == region]
+    
+    ## collect station location
+    stlas = [stations.Latitude[stations.code == code.replace('_', '-')].values[0] for code in itd_use.Code]
+    stlos = [stations.Longitude[stations.code == code.replace('_', '-')].values[0] for code in itd_use.Code]
+    
+    stat_coords = np.c_[stlos, stlas]
+    
+    itd_use['stlo'] = stlos
+    itd_use['stla'] = stlas
+    
+    
+    ## search for data in range of A-B line
+    line_tree = KDTree(line)
+    
+    data_in_range = line_tree.query_ball_point(x = stat_coords, r = 30 / degrees2kilometers(1))
+    data_in_range =[bool(data_in_range[j]) for j in range(len(data_in_range))]
+    
+    
+    ## search for data in range of 1-2 line
+    joints12 = np.array([[-65.5816, -24.1358], [-64.8716, -24.3922]]) # Sub-line for north array
+    joints_dist12, line12, line_dist12 = Return_Line_Elements(joints12)
+
+    
+    line_tree12 = KDTree(line12)
+    data_in_range12 = line_tree12.query_ball_point(x = stat_coords, r = 10 / degrees2kilometers(1))
+    data_in_range12 =[bool(data_in_range12[j]) for j in range(len(data_in_range12))]
+    
+    
+    ## Read file data and time-stack for average station RF
+    files = np.unique(np.array(itd_use.File)[data_in_range])
+    files12 = np.unique(np.array(itd_use.File)[data_in_range12])
+    files = np.append(files, files12)
+    
+    
+    nets, stlas, stlos, stels, tr_id = [],[],[],[],[]    # resetting stlas and stlos list to queried data
+    st = Stream()
+    for f in files:
+        try:
+            st += read('../DATA/{}/DATA_CCP/{}'.format(region, f))
+        except:
+            pass
+    
+    st.stack(group_by='{network}.{station}', npts_tol=2)    # T-stack by station for average station RF
+    for i, tr in enumerate(st):
+        nets.append(tr.stats.network)
+        stlas.append(stations.Latitude[stations.code == '{}-{}'.format(tr.stats.network, tr.stats.station)].values[0])
+        stlos.append(stations.Longitude[stations.code == '{}-{}'.format(tr.stats.network, tr.stats.station)].values[0])
+        stels.append(grid.sel(lat = stlas[-1], lon = stlos[-1], method = 'nearest').values.item())
+        tr_id.append(i)
+    
+    select_data = pd.DataFrame({'longitude': np.squeeze(stlos), 'latitude': np.squeeze(stlas), 'stel': np.squeeze(stels), 'tr_id': np.array(tr_id)})
+
+
+    used_data = []
+    for i in range(len(joints) - 1):                                                    ### width here is arbitrary
+       track = pygmt.project(data = select_data,center=joints[i],endpoint=joints[i+1], width=[-100, 100], length = [0, joints_dist[i+1]], unit=True)
+       track = track.rename(columns={0:'stlo',1:'stla',2:'stel',3:'tr_id',4:'p',5:'q',6:'r',7:'s'})
+
+       ## check for re-used data from projection, remove those data
+       data_used_check = [track.tr_id[j] in used_data for j in range(len(track))]
+       data_used_check = [not(bool(data_used_check[j])) for j in range(len(data_used_check))]
+       track = track[data_used_check].reset_index(drop = True)
+       used_data = np.append(used_data, np.unique(track.tr_id.values))
+       
+       track = track.sort_values('p').reset_index(drop = True)
+
+       for j in range(len(track)-2):
+
+           station_dist = track.p[j] + joints_dist[i]
+
+           # collect data within astack_ range of each center station
+           center_tree = KDTree(np.c_[track.stlo[j], track.stla[j]])
+           in_range = center_tree.query_ball_point(x = np.c_[select_data.longitude, select_data.latitude], r = 8 / degrees2kilometers(1))
+           in_range =[bool(in_range[k]) for k in range(len(in_range))]
+           in_range = select_data[in_range].tr_id.values
+
+           st_stack = Stream()
+           for trace in in_range:
+               st_stack += st[trace].copy()
+
+           st_stack.stack(npts_tol = 2)
+           
+           ## normalize to p-wave amplitude
+           extrema_limit = st_stack[0].data.max() * 0.10
+           # cycle through the data array to find all major extrema
+           extrema=[]
+           extrema_i = []
+           k = 1
+           for dat in st_stack[0].data[1:len(st_stack[0].data)-2]:
+               left = st_stack[0].data[k - 1]
+               right = st_stack[0].data[k + 1]
+               if (dat > left) and (dat > right):
+                       if dat > extrema_limit:
+                           extrema.append(dat)
+                           extrema_i.append(k)
+               elif (dat < left) and (dat < right):
+                   if dat < -extrema_limit:
+                       extrema.append(dat)
+                       extrema_i.append(k) 
+               k += 1
+               
+           
+           # get the first peak amplitude, and divide the data by this value
+           # the data is now normalized
+           p_amp = extrema[0]
+           
+           st_stack[0].data = st_stack[0].data / p_amp
+
+
+           tr = st_stack[0]
+           data = tr.data
+           time = tr.times() - 10
+
+           time_trim = time
+           data_trim = data * 20 + station_dist
+
+           pos = data_trim.copy()
+           neg = data_trim.copy()
+
+           pos[0] = station_dist
+           pos[pos < station_dist] = station_dist
+           pos[-1] = station_dist
+
+           neg[0] = station_dist
+           neg[neg > station_dist] = station_dist
+           neg[-1] = station_dist
+
+           fig.plot(x = pos, y = time_trim,pen = '0.1p,black', no_clip = False, fill = 'red', transparency = 20)
+           fig.plot(x = neg, y = time_trim,pen = '0.1p,black', no_clip = False, fill = 'blue', transparency = 20)
+
+
+
+
+
+
+
+    fig.shift_origin(yshift = '-{}c'.format(9.5))
+    gmt_region = [-71, -63.3, -24.5, -21.8]
+    west, east, south, north = gmt_region
+
+
+    prj = 'M{}c'.format(fig_x)            # set the map projection
+    
+    
+    fig.basemap(region=gmt_region, projection=prj, frame=['wESn', 'xa2f1g2+lLongitude', 'ya1f1g2+lLatitude'])
+    
+    shade = pygmt.grdgradient(grid=grid, azimuth="0/90", normalize="e1")
+
+    # overlay the grid image DEM over the basemap
+    fig.grdimage(grid=grid, shading = shade, cmap = '../DATA/MAPPING/natural_mod.cpt', projection = prj, transparency = 65)
+    
+    
+    # overlay national borders, coastlines, and make the water blue
+    fig.coast(borders = ["1/1.5p,SlateGray"], shorelines="1/0.5p", water = "skyblue", transparency = 10)
+    
+    
+    
+    APVC = gpd.read_file('../DATA/MAPPING/APVC2.shp')
+    fig.plot(data=APVC, region = gmt_region, pen = '0.7p,black', fill = 'pink', transparency = 50)
+    
+    volcanoes = pd.read_csv('../DATA/MAPPING/GVP_Holocene_Volcanoes.csv')
+    fig.plot(x = volcanoes.Longitude, y = volcanoes.Latitude, style='kvolcano/0.4c', fill = 'red', pen='0.75p,black')
+
+     # now plot station data
+    fig.plot(x = stat_table.stlo[(stat_table.net != 'XM') | (stat_table.net != 'XN')], y = stat_table.stla[(stat_table.net != 'XM') | (stat_table.net != 'XN')], style='i0.23c', fill = 'gold',  pen='0.4p,black')
+     
+     
+    try:
+         fig.plot(x = stations[stations.Network == 'XN'].Longitude, y = stations[stations.Network == 'XN'].Latitude, style='i0.25c',fill = 'cyan', pen='black', transparency = 50)
+         fig.plot(x = stat_table[stat_table.net == 'XN'].stlo, y =  stat_table[stat_table.net == 'XN'].stla, style='i0.25c',fill = 'cyan', pen='black')
+    except:
+        pass
+    
+    try:
+         fig.plot(x = stations[stations.Network == 'XM'].Longitude, y = stations[stations.Network == 'XM'].Latitude, style='i0.3c',fill = 'magenta', pen='0.6p,black', transparency = 50)
+         fig.plot(x = stat_table[stat_table.net == 'XM'].stlo, y =  stat_table[stat_table.net == 'XM'].stla, style='i0.3c',fill = 'magenta', pen='0.6p,black')
+    except:
+         pass
+     
+     
+     
+    tecto_zones = gpd.read_file('../DATA/MAPPING/AndeanTectonicRegimes2.shp')
+    areas = ['Altiplano', 'WC','EC', 'SB', 'SA','LV', 'SdA' ]
+    
+    tecto_zones = tecto_zones[tecto_zones.Zone.isin(areas)]
+    
+    tecto_zones = tecto_zones.dissolve(by = 'Zone')
+    fig.plot(data = tecto_zones, pen = '1p,white')
+    fig.plot(data = tecto_zones, pen = '1p,black,6_6:6p')
+    
+    fig.plot(x = joints[:,0], y = joints[:,1], pen = '1.2p,black,--')
+
+    Numerals = "ABCDEFGHIJKLMNOP"
+    # Numerals = ["A", "A'"]
+    for i in range(len(joints)):
+        fig.text(x = joints[i,0], y = joints[i,1], text = Numerals[i],  font = '12p, Helvetica-Bold', fill = 'white', pen = '0.3p,black')
+    
+    sub_joints =  np.array([[-65.5816, -24.1358], [-64.8716, -24.3922]]) # Sub-line for north array
+
+    
+    fig.plot(x = sub_joints[:,0], y = sub_joints[:,1], pen = '1.2p,black,--')
+    fig.text(x = sub_joints[0,0], y = sub_joints[0,1], text = '1',  font = '12p, Helvetica-Bold', fill = 'white', pen = '0.3p,black')
+    fig.text(x = sub_joints[1,0], y = sub_joints[1,1], text ="2",  font = '12p, Helvetica-Bold', fill = 'white', pen = '0.3p,black')
+    
+
+    
+
+
+    spec = io.StringIO(
+    """   
+N 4
+S 0.20c i 0.3c cyan 0.4p,black 0.65c TANGO Node
+S 0.20c i 0.3c magenta 0.6p,black 0.65c TANGO Broadband
+S 0.20c i 0.3c gold 0.6p,black 0.65c Other Stations
+
+S 0.20c kvolcano 0.40c red 0.75p,black 0.65c Holocene Volcano
+S 0.05c - .5c - 1p,- 0.65c Tectonic Region
+S 0.20c - .5c - 1p,gray,- 0.65c Country Border
+S 0.20c r 0.4/0.25 pink 0.8p,black 0.65c APVC
+
+
+
+G 0.07c
+G 0.07c
+
+    """
+    )
+
+
+with pygmt.config(FONT = '12p'):
+     fig.legend(spec = spec,  position='jBL+w18c+o0c/-2.5c')
+ 
+
+
+
+fig.show()
+
+fig.savefig('../FIGURES/S2_ARF_AllG_CCP.png', dpi = 300)
+
+

@@ -64,7 +64,7 @@ region = 'TANGO_North'
 stat_table = pd.read_csv('../DATA/SPREADSHEETS/{}_FinalStations_RE.csv'.format(region))
 stat_table['Code'] = ['{}-{}'.format(stat_table.net[i], stat_table.stat[i]) for i in range(len(stat_table))]
 
-contributing_stations = pd.read_csv('../DATA/SPREADSHEETS/Contributing_Stations.csv')
+contributing_stations = pd.read_csv('../DATA/MAPPING/Contributing_Stations_RE.csv')
 
 stat_table = stat_table[stat_table.Code.isin(contributing_stations.Code)].reset_index(drop = True)
 
@@ -352,7 +352,7 @@ with pygmt.config(FONT = '14p', MAP_ANNOT_OFFSET="10p", MAP_LABEL_OFFSET="10p"):
 
     fig.grdimage(grid=grid, shading = shade, cmap = True, projection = prj, transparency = 65)
 
-    fig.plot(x = joints[:,0], y = joints[:,1], pen = '1.2p,black,')
+    fig.plot(x = line[:,0], y = line[:,1], pen = '1.2p,black,')
 
     fig.plot(data='../DATA/MAPPING/APVC2.shp',  pen = '0.75p,black', fill = 'pink', transparency = 50)
     fig.plot(data='../DATA/MAPPING/Calderas.shp',  pen = '0.75p,black', fill = 'lightred', transparency = 50)
@@ -377,9 +377,13 @@ with pygmt.config(FONT = '14p', MAP_ANNOT_OFFSET="10p", MAP_LABEL_OFFSET="10p"):
     except:
         pass
 
-    # eqs = pd.read_csv('../DATA/MAPPING/USGS_EQs.csv')
     eqs = pd.read_csv('../DATA/MAPPING/ISC_EQs.csv')
-    fig.plot(x = eqs.longitude, y = eqs.latitude, style = 'c0.2c', fill = 'green', pen = '0.5p,black')    
+    eqs = eqs[eqs.DEPTH < 50]
+    fig.plot(x = eqs.LON, y = eqs.LAT, style = 'c0.2c', pen = '0.5p,black')    
+
+    eqs = pd.read_csv('../DATA/MAPPING/ISC_EQs_Reviewed.csv')
+    eqs = eqs[eqs.DEPTH < 50]
+    fig.plot(x = eqs.LON, y = eqs.LAT, style = 'c0.2c', fill = 'green', pen = '0.5p,black')    
 
 
     fig.shift_origin(yshift = f'-3c')
@@ -416,12 +420,8 @@ with pygmt.config(FONT = '14p', MAP_ANNOT_OFFSET="10p", MAP_LABEL_OFFSET="10p"):
     with pygmt.config(FONT_ANNOT_PRIMARY="20p", FONT_LABEL = '20p'):
         fig.colorbar(cmap = True, position = 'JMR+w{}+o0.25c/0c'.format(fig_y), frame = 'xa0.25f0.1+lAmplitude')
         
-    fig.basemap(region = [dist_min, dist_lim, -depth, 0], projection = 'X{}c/{}c'.format(fig_x, fig_y),frame = ['Wsne', 'xafg50+lProfile Distance (km)', 'ya20f10g50+lDepth (km)'])
+    fig.basemap(region = [dist_min, dist_lim, -depth, 0], projection = 'X{}c/{}c'.format(fig_x, fig_y),frame = ['WSne', 'xafg50+lProfile Distance (km)', 'ya20f10g50+lDepth (km)'])
     
-
-# # make an empty base frame
-#     fig.shift_origin(yshift = '-{}c'.format(fig_y + 0.5))
-#     fig.basemap(region = [dist_min, dist_lim, -depth, 0], projection = 'X{}c/{}c'.format(fig_x, fig_y),frame = ['WSne', 'xafg+lProfile Distance (km)', 'ya20f10g+lDepth (km)'])
 
 
 
@@ -432,9 +432,12 @@ S 0.40c i 0.3c gold 0.6p,black 0.65c Other Station
 S 0.40c i 0.3c magenta 0.2p,black 0.65c TANGO Broadband
 S 0.40c i 0.3c cyan 0.4p,black 0.65c TANGO Node
 
-S 0.5c kvolcano 0.30c red 0.75p,black 1c Holocene Volcano
-S 0.4c c 0.3c green 0.6p,black, 0.65c ISC Earthquake
 S 0.05c - .5c - 1p,- 0.65c Tectonic Boundaries
+S 0.5c kvolcano 0.30c red 0.75p,black 1c Holocene Volcano
+
+S 0.4c c 0.3c white 0.6p,black, 0.65c ISC Bulletin Earthquake
+S 0.4c c 0.3c green 0.6p,black, 0.65c ISC Reviewed Earthquake
+
 
 
 G 0.07c
@@ -442,13 +445,13 @@ G 0.07c
 
 """
     )
-    fig.legend(spec = spec,  position='jBL+w{}c+o0c/-3c'.format(fig_x+2))
+    fig.legend(spec = spec,  position='jBL+w{}c+o-2c/-3.5c'.format(fig_x+5))
 
 
 
 
 fig.show()
 
-fig.savefig('../FIGURES/Fig5_ArcInterpretation_withMap.png', dpi = 300)
+fig.savefig('../FIGURES/Fig5_ArcInterpretation_withMap.png', dpi = 600)
 
 

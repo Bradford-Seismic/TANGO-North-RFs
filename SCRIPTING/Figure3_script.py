@@ -49,7 +49,6 @@ active_dir = './'
 
 
 os.chdir(active_dir)
-model = TauPyModel(model="iasp91")
 
 
 
@@ -60,12 +59,12 @@ snr = pd.read_csv('../DATA/SPREADSHEETS/SNR_Summary.csv')
 itd = pd.read_csv('../DATA/SPREADSHEETS/Iterdecon_Summary_RE.csv', keep_default_na=False)
 
 region = 'TANGO_North'
-G=5.0
+G=2.5
 
 stat_table = pd.read_csv('../DATA/SPREADSHEETS/{}_FinalStations_RE.csv'.format(region))
 stat_table['Code'] = ['{}-{}'.format(stat_table.net[i], stat_table.stat[i]) for i in range(len(stat_table))]
 
-contributing_stations = pd.read_csv('../DATA/SPREADSHEETS/Contributing_Stations.csv')
+contributing_stations = pd.read_csv('../DATA/MAPPING/Contributing_Stations_RE.csv')
 
 stat_table = stat_table[stat_table.Code.isin(contributing_stations.Code)].reset_index(drop = True)
 
@@ -78,7 +77,6 @@ def closest_idx(lst, K):
      idx = (np.abs(lst - K)).argmin()
      return idx
 
-
 def haversine(lat1, lon1, lat2, lon2):
     # Convert latitude and longitude from degrees to radians
     lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
@@ -90,7 +88,6 @@ def haversine(lat1, lon1, lat2, lon2):
     c = 2 * atan2(sqrt(a), sqrt(1-a))
     distance = 6371 * c  # Earth radius in kilometers (approx.)
     return distance
-
 
 def Return_Line_Elements(joints):
 
@@ -124,7 +121,6 @@ def Return_Line_Elements(joints):
     line_dist = np.cumsum(d)
 
     return joints_dist, line, line_dist
-
 
 def plot_topo(fig):
     
@@ -551,4 +547,4 @@ with pygmt.config(FONT = '12p'):
 
 fig.show()
 
-fig.savefig('../FIGURES/Fig3_ARF_CCP.png', dpi = 300)
+fig.savefig('../FIGURES/Fig3_ARF_CCP.png', dpi = 600)

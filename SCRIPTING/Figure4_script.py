@@ -64,7 +64,7 @@ region = 'TANGO_North'
 stat_table = pd.read_csv('../DATA/SPREADSHEETS/{}_FinalStations_RE.csv'.format(region))
 stat_table['Code'] = ['{}-{}'.format(stat_table.net[i], stat_table.stat[i]) for i in range(len(stat_table))]
 
-contributing_stations = pd.read_csv('../DATA/SPREADSHEETS/Contributing_Stations.csv')
+contributing_stations = pd.read_csv('../DATA/MAPPING/Contributing_Stations_RE.csv')
 
 stat_table = stat_table[stat_table.Code.isin(contributing_stations.Code)].reset_index(drop = True)
 
@@ -439,7 +439,7 @@ G 0.07c
 
 fig.show()
 
-fig.savefig('../FIGURES/Fig4_ForearcInterp.png', dpi = 300)
+fig.savefig('../FIGURES/Fig4_ForearcInterp.png', dpi = 600)
 
 
 

@@ -45,22 +45,8 @@ warnings.simplefilter('ignore', category = UserWarning)
 warnings.simplefilter('ignore', category = FutureWarning)
 
 
-active_dir = './'
-
-
-
-os.chdir(active_dir)
-model = TauPyModel(model="iasp91")
-
-
-
-stations = pd.read_csv('../DATA/SPREADSHEETS/SA_Stations.csv')
-moveouts = pd.read_csv('../DATA/SPREADSHEETS/Moveout_Summary.csv')
-downloads = pd.read_csv('../DATA/SPREADSHEETS/Download_Summary.csv')
-snr = pd.read_csv('../DATA/SPREADSHEETS/SNR_Summary.csv')
-itd = pd.read_csv('../DATA/SPREADSHEETS/Iterdecon_Summary_RE.csv', keep_default_na=False)
-
 region = 'TANGO_North'
+
 
 
 
@@ -302,16 +288,19 @@ def plot_topo(fig):
 
 ###### Read station objects and show only stations contributing to line
 
+stations = pd.read_csv('../DATA/SPREADSHEETS/{}_FinalStations_RE.csv'.format(region))
+
 stat_table = pd.read_csv('../DATA/SPREADSHEETS/{}_FinalStations_RE.csv'.format(region))
 codes = ['{}-{}'.format(stat_table.net[i], stat_table.stat[i]) for i in range(len(stat_table))]
 stat_table['Code'] = codes
 
-contributing_stations = pd.read_csv('../DATA/SPREADSHEETS/Contributing_Stations.csv')
 
-all_stat_table = pd.read_csv('../DATA/SPREADSHEETS/{}_FinalStations_RE.csv'.format(region))
 
+contributing_stations = pd.read_csv('../DATA/MAPPING/Contributing_Stations_RE.csv')
 stat_table = stat_table[stat_table['Code'].isin(contributing_stations.Code.to_list())]
 stat_table.reset_index(drop = True, inplace = True)
+
+
 
 
 gmt_region = [-71.5, -63, -25, -21.4]
@@ -325,11 +314,10 @@ y = xr.DataArray(line[:,1], dims='Distance_Along_Trend')
 grid = pygmt.datasets.load_earth_relief(resolution="15s", region=[west, east, south, north])
 
 
+
+
+
 fig_x = 15
-
-
-tecto_plates = gpd.read_file('../DATA/MAPPING/PlateBoundaries_Nazca.shp')
-
 
 fig = pygmt.Figure()
 with pygmt.config(FONT = '12p', MAP_FRAME_TYPE = 'plain'):
@@ -352,6 +340,7 @@ with pygmt.config(FONT = '12p', MAP_FRAME_TYPE = 'plain'):
     
 
     # Plot geographical markers
+    tecto_plates = gpd.read_file('../DATA/MAPPING/PlateBoundaries_Nazca.shp')
     fig.plot(data=tecto_plates[tecto_plates.Type == 'Convergent'], region = gmt_region, pen = '1.5p,black', style = "f1c/0.3c+r+t", fill = 'black')
     fig.plot(data='../DATA/MAPPING/APVC2.shp', region = gmt_region, pen = '0.75p,black', fill = 'pink', transparency = 50)
     fig.plot(data='../DATA/MAPPING/Calderas.shp', region = gmt_region, pen = '0.75p,black', fill = 'lightred', transparency = 50)
@@ -384,16 +373,16 @@ with pygmt.config(FONT = '12p', MAP_FRAME_TYPE = 'plain'):
 
 
     # now plot station data
-    fig.plot(x = stat_table.stlo[(stat_table.net != 'XM') | (stat_table.net != 'XN')], y = stat_table.stla[(stat_table.net != 'XM') | (all_stat_table.net != 'XN')], style='i0.23c', fill = 'gold',  pen='0.4p,black')
+    fig.plot(x = stat_table.stlo[(stat_table.net != 'XM') | (stat_table.net != 'XN')], y = stat_table.stla[(stat_table.net != 'XM') | (stat_table.net != 'XN')], style='i0.23c', fill = 'gold',  pen='0.4p,black')
     
     try:
-        fig.plot(x = stations[stations.Network == 'XN'].Longitude, y = stations[stations.Network == 'XN'].Latitude, style='i0.25c',fill = 'cyan', pen='black', transparency = 50)
+        fig.plot(x = stations[stations.net == 'XN'].stlo, y = stations[stations.net == 'XN'].stla, style='i0.25c',fill = 'cyan', pen='black', transparency = 75)
         fig.plot(x = stat_table[stat_table.net == 'XN'].stlo, y =  stat_table[stat_table.net == 'XN'].stla, style='i0.25c',fill = 'cyan', pen='black')
     except:
         pass
    
     try:
-        fig.plot(x = stations[stations.Network == 'XM'].Longitude, y = stations[stations.Network == 'XM'].Latitude, style='i0.3c',fill = 'magenta', pen='0.6p,black', transparency = 50)
+        fig.plot(x = stations[stations.net == 'XM'].stlo, y = stations[stations.net == 'XM'].stla, style='i0.3c',fill = 'magenta', pen='0.6p,black', transparency = 75)
         fig.plot(x = stat_table[stat_table.net == 'XM'].stlo, y =  stat_table[stat_table.net == 'XM'].stla, style='i0.3c',fill = 'magenta', pen='0.6p,black')
     except:
         pass
@@ -404,7 +393,7 @@ with pygmt.config(FONT = '12p', MAP_FRAME_TYPE = 'plain'):
     # plot joints
     sub_joints =  np.array([[-65.5816, -24.1358], [-64.8716, -24.3922]]) # Sub-line for north array
 
-    fig.plot(x = joints[:,0], y = joints[:,1], pen = '1.2p,black,')
+    fig.plot(x = line[:,0], y = line[:,1], pen = '1.2p,black,')
     
     Numerals = "ABCDEFGHIJKLMNOP"
     # Numerals = ["A", "A'"]

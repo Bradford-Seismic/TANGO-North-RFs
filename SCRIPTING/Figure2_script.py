@@ -57,25 +57,25 @@ downloads = pd.read_csv('../DATA/SPREADSHEETS/Download_Summary.csv')
 snr = pd.read_csv('../DATA/SPREADSHEETS/SNR_Summary.csv')
 itd = pd.read_csv('../DATA/SPREADSHEETS/Iterdecon_Summary_RE.csv', keep_default_na=False)
 
-
 region = 'TANGO_North'
-G=5.0
+
+
+itd_pass = itd[itd.Region == region][(itd.Accept == 'Man QC Pass') | (itd.Accept == 'Auto QC Pass')]
 
 stat_table = pd.read_csv('../DATA/SPREADSHEETS/{}_FinalStations_RE.csv'.format(region))
 stat_table['Code'] = ['{}-{}'.format(stat_table.net[i], stat_table.stat[i]) for i in range(len(stat_table))]
 
-contributing_stations = pd.read_csv('../DATA/SPREADSHEETS/Contributing_Stations.csv')
+contributing_stations = pd.read_csv('../DATA/MAPPING/Contributing_Stations_RE.csv')
 
 stat_table = stat_table[stat_table.Code.isin(contributing_stations.Code)].reset_index(drop = True)
 
 
 
-
 event_table = pd.read_csv('../DATA/SPREADSHEETS/{}_FinalEvents_RE.csv'.format(region))
-contributing_events = pd.read_csv('../DATA/SPREADSHEETS/Contributing_Events.csv')
+contributing_events = pd.read_csv('../DATA/MAPPING/Contributing_Events_RE.csv')
 
 
-event_table = event_table[event_table.event.isin(contributing_events.Events)]
+event_table = event_table[event_table.event.isin(contributing_events.Event)]
 
 
 joints =  np.loadtxt('../DATA/MAPPING/{}_CCP_Line.txt'.format(region), delimiter = ',')
@@ -84,7 +84,6 @@ def closest_idx(lst, K):
      lst = np.asarray(lst)
      idx = (np.abs(lst - K)).argmin()
      return idx
-
 
 def haversine(lat1, lon1, lat2, lon2):
     # Convert latitude and longitude from degrees to radians
@@ -97,7 +96,6 @@ def haversine(lat1, lon1, lat2, lon2):
     c = 2 * atan2(sqrt(a), sqrt(1-a))
     distance = 6371 * c  # Earth radius in kilometers (approx.)
     return distance
-
 
 def Return_Line_Elements(joints):
 
@@ -131,7 +129,6 @@ def Return_Line_Elements(joints):
     line_dist = np.cumsum(d)
 
     return joints_dist, line, line_dist
-
 
 def plot_topo(fig):
     
@@ -314,7 +311,6 @@ def plot_topo(fig):
 
 
     return fig
-
 
 
 
@@ -588,5 +584,5 @@ fig.show()
 
 
 
-fig.savefig('../FIGURES/F2_EQMap+VModels.png', dpi = 300)
+fig.savefig('../FIGURES/F2_EQMap+VModels.png', dpi = 600)
 

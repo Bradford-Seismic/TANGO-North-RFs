@@ -37,20 +37,20 @@ from scipy.spatial import KDTree
 from scipy.stats import binned_statistic_2d
 from scipy.stats import norm
 import concurrent.futures
+import multiprocessing
 
 
 import geopandas as gpd
 
-
-
-active_dir = './'
+active_dir = '/Users/jimbradford/TANGO_North/SCRIPTING_LINUX'
+# active_dir = '/tango/bradford/Tango_2/SCRIPTING_LINUX/'
 
 os.chdir(active_dir)
 
 
 
-shear_model = 'BlendedModel_0.7APVC-ANT_0.3FWT_MantleSpec_RE_Smoothed.nc'
-vpvs_model = 'CentralAndes_Zoned_VpVs_Arc-1.85_RE_Smoothed.nc'
+shear_model = 'BlendedModel_0.7APVC-ANT_0.3FWT_MantleSpec_Smoothed.nc'
+vpvs_model = 'CentralAndes_Zoned_VpVs_Arc-1.85_Smoothed.nc'
 
 
 
@@ -467,6 +467,10 @@ def Trace_Pierce_Point(trace_index):
 
 
     tr = st[trace_index].copy()
+    
+    trace_station = f'{tr.stats.network}-{tr.stats.station}'
+    event_name = tr.fname.split('.')[3]
+
 
     # 1) acquire station location and baz/ray parameter
     stx = tr.x
@@ -538,6 +542,13 @@ def Trace_Pierce_Point(trace_index):
 
     # multiple vs*k to obtain vp
     vp = vs * ku
+    
+    
+    
+    T = 1/ (G / 2)
+    ts = (z + se) / vs
+    fresnel_radius = vs * np.sqrt((ts + (T/2))**2 - ts**2)
+
 
 
     # Solve for incident angle scaling along vector
@@ -607,7 +618,7 @@ def Trace_Pierce_Point(trace_index):
 
     gc.collect()
 
-    return trace_index, xpierce, ypierce, trace_z, seisout
+    return trace_index, xpierce, ypierce, trace_z, seisout, fresnel_radius, np.full(len(xpierce), trace_station), np.full(len(xpierce), event_name), np.full(len(xpierce), p)
 
 
 
@@ -615,24 +626,50 @@ def Trace_Pierce_Point(trace_index):
 
 # note that the trace_id variable here only corresponds to trace index within st, and is not the trace_id dictionary within each trace
 trace_id = np.arange(0, len(st), 1)
-with concurrent.futures.ProcessPoolExecutor(max_workers = 24) as executor:
+with concurrent.futures.ProcessPoolExecutor(max_workers = 4, mp_context=multiprocessing.get_context('fork')) as executor:
     pierce_traces = executor.map(Trace_Pierce_Point, trace_id)
 
+
+    pierce_map = np.array([0,0,0,0,0])
+    pierce_station = np.array([])
+    pierce_event = np.array([])
+    pierce_ray = np.array([])
+    
+    print('writing pierce data')
     for ray in pierce_traces:
         st[ray[0]].pierce = {'x': ray[1], 'y': ray[2], 'z': ray[3], 'seis': ray[4]}
 
 
+        # also, record xyz-f position of ray and amplitude
+        ray_dat = np.c_[np.round(west + ray[1]/dd, 4), np.round(south + km_to_latitude(ray[2]), 4), ray[3], np.round(ray[4], 4), np.round(ray[5], 4)]
+        pierce_map = np.vstack((pierce_map, ray_dat))
+        pierce_station = np.append(pierce_station, ray[6])
+        pierce_event = np.append(pierce_event, ray[7])
+        pierce_ray = np.append(pierce_ray, ray[8])
+
+
+print('saving pierce data')
+# save pierce map as csv
+pierce_map = pierce_map[1:len(pierce_map)]
+pierce_df = pd.DataFrame(data = pierce_map, columns = ['longitude', 'latitude', 'depth', 'amplitude', 'fresnel_radius'])
+pierce_df['station'] = pierce_station
+pierce_df['event'] = pierce_event
+pierce_df['ray_param'] = pierce_ray
+pierce_df.to_csv('../DATA/MAPPING/PiercePoints_RE.csv', index = False)
 
 
 
 
 gc.collect()
 
+
+sys.exit('\n\nRay Tracing Complete')
+
 #%% Plot the Piercing Points
 
 
 
-pierce_depth = 140
+pierce_depth = 20
 print('Plotting Pierce Points at {} km depth'.format(pierce_depth))
 
 

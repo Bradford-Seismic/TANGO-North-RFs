@@ -42,9 +42,7 @@ import multiprocessing
 
 import geopandas as gpd
 
-active_dir = '/Users/jimbradford/TANGO_North/SCRIPTING_LINUX'
-# active_dir = '/tango/bradford/Tango_2/SCRIPTING_LINUX/'
-
+active_dir = './'
 os.chdir(active_dir)
 
 

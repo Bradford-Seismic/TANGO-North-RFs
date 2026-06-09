@@ -2,7 +2,9 @@
 Receiver Function Scripts and Workflows used to produce the manuscript "The Anatomy of a Modern Cordillera Style Mountain System:  Northern Chile and Argentina", submitted to Journal of Geophysical Research; Solid Earth
 
 preprint doi: https://doi.org/10.22541/essoar.15002927/v1
+
 Initial Submission: April 4, 2026
+
 Revisions Submitted: June 12, 2026
 
 This generalized receiver function workflow follows the outline provided in the article "On the Viability of Using Autonomous Three‐Component Nodal Geophones to Calculate Teleseismic 
@@ -18,6 +20,7 @@ As the primary author, and developer for these scripts, I encourage these files 
 the main article that this software contributes to is published by the time this repository is public, these scripts will not receive any updates. Please be aware these were developed using Python 3.12.
 
 Happy analyzing,
+
 -Jim Bradford, University of Arizona
 
 
